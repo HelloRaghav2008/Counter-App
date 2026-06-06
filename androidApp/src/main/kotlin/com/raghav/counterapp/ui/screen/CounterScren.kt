@@ -38,7 +38,7 @@ fun CounterScreen(viewModel: CounterViewModel = viewModel()) {
             onClick = viewModel::increment,
             enabled = state.incEnabled,
             colors = ButtonDefaults.buttonColors(
-                containerColor = (if (state.count>=8) Color.Green else Color.Cyan)
+                containerColor = (if (state.count >= 8) Color.Green else Color.Cyan)
             )
         ) {
             Text("+")
@@ -50,7 +50,7 @@ fun CounterScreen(viewModel: CounterViewModel = viewModel()) {
             onClick = viewModel::decrement,
             enabled = state.incEnabled,
             colors = ButtonDefaults.buttonColors(
-                containerColor = (if (state.count<=2) Color.Green else Color.Cyan)
+                containerColor = (if (state.count <= 2) Color.Red else Color.Cyan)
             )
         ) {
             Text("-")
