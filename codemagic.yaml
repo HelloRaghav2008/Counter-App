@@ -1,0 +1,181 @@
+workflows:
+  ios-simulator-appetize:
+    name: iOS Simulator Build (Appetize)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      vars:
+        # --- Project configuration ---
+        # Set SCHEME to your iOS app scheme name (usually your app module name)
+        SCHEME: "iosApp"
+        # Your Xcode project/workspace path relative to repo root
+        # If using .xcworkspace (CocoaPods), change .xcodeproj → .xcworkspace
+        XCODE_PROJECT: "iosApp/iosApp.xcodeproj"
+        # Simulator destination — iPhone 15 on iOS 17 is widely available on M2 runners
+        SIMULATOR_NAME: "iPhone 17"
+        SIMULATOR_OS: "26"
+        # Output zip name (what Appetize expects)
+        APP_ZIP: "iosApp-simulator.zip"
+      xcode: 26
+      # No code signing needed for simulator builds
+      groups: []
+
+    scripts:
+      # ── 1. Validate environment ────────────────────────────────────────────
+      - name: Print environment info
+        script: |
+          echo "=== Xcode version ==="
+          xcodebuild -version
+          echo "=== Available simulators ==="
+          xcrun simctl list devices available | grep -E "iPhone|iPad" | head -20
+          echo "=== Java version ==="
+          java -version
+          echo "=== Gradle version ==="
+          ./gradlew --version
+
+      # ── 2. Fix Gradle wrapper permissions ─────────────────────────────────
+      # Without this, gradlew is not executable and the build fails immediately
+      - name: Make Gradle wrapper executable
+        script: chmod +x gradlew
+
+      # ── 4. Boot simulator early (saves wall-clock time) ───────────────────
+      - name: Boot simulator
+        script: |
+          set -euo pipefail
+
+          # Find exact UDID for the requested simulator
+          UDID=$(xcrun simctl list devices available -j \
+            | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          target_name = '${SIMULATOR_NAME}'
+          target_os   = '${SIMULATOR_OS}'
+          for runtime, devices in data['devices'].items():
+            if target_os in runtime:
+              for d in devices:
+                if d['name'] == target_name and d['isAvailable']:
+                  print(d['udid'])
+                  sys.exit(0)
+          print('NOT_FOUND')
+          ")
+
+          if [ "$UDID" = "NOT_FOUND" ]; then
+            echo "Exact simulator not found, falling back to any available iPhone"
+            UDID=$(xcrun simctl list devices available | grep "iPhone" | head -1 | grep -E -o '\([A-F0-9-]+\)' | tr -d '()')
+          fi
+
+          echo "Using simulator UDID: $UDID"
+          echo "SIMULATOR_UDID=$UDID" >> $CM_ENV  # export for later steps
+
+          # Boot if not already booted
+          STATE=$(xcrun simctl list devices | grep "$UDID" | grep -E -o 'Booted|Shutdown' || echo "Shutdown")
+          if [ "$STATE" != "Booted" ]; then
+            xcrun simctl boot "$UDID"
+          fi
+
+          # Wait for the simulator to reach Booted state (max 90 s)
+          echo "Waiting for simulator to boot..."
+          for i in $(seq 1 18); do
+            STATE=$(xcrun simctl list devices | grep "$UDID" | grep -E -o 'Booted|Shutdown' || echo "Shutdown")
+            if [ "$STATE" = "Booted" ]; then
+              echo "Simulator booted after ~$((i * 5))s"
+              break
+            fi
+            sleep 5
+          done
+
+          # Final check
+          STATE=$(xcrun simctl list devices | grep "$UDID" | grep -E -o 'Booted|Shutdown' || echo "Shutdown")
+          if [ "$STATE" != "Booted" ]; then
+            echo "ERROR: Simulator failed to boot within 90 seconds"
+            exit 1
+          fi
+
+      # ── 5. Build iOS app for simulator ────────────────────────────────────
+      # IMPORTANT: Do NOT pipe through xcpretty with `|` — it masks non-zero
+      # exit codes. Use `set -o pipefail` or capture exit code explicitly.
+      # We use `| tee` with pipefail so both pretty output and error detection work.
+      - name: Build iOS app (simulator)
+        script: |
+          set -euo pipefail
+
+          # Read the UDID exported in the previous step
+          source $CM_ENV 2>/dev/null || true
+          DEST="platform=iOS Simulator,id=${SIMULATOR_UDID:-booted}"
+
+          xcodebuild \
+            -project "$XCODE_PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination "$DEST" \
+            -derivedDataPath DerivedData \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE="" \
+            build \
+            2>&1 | tee xcodebuild.log
+
+          # Explicitly check exit status (pipefail handles it, but be explicit)
+          BUILD_EXIT=${PIPESTATUS[0]}
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "ERROR: xcodebuild exited with code $BUILD_EXIT"
+            echo "=== Last 50 lines of log ==="
+            tail -50 xcodebuild.log
+            exit "$BUILD_EXIT"
+          fi
+
+      # ── 6. Locate the .app bundle ──────────────────────────────────────────
+      - name: Locate .app bundle
+        script: |
+          set -euo pipefail
+
+          APP_PATH=$(find DerivedData -name "*.app" -not -path "*/PlugIns/*" | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: .app bundle not found in DerivedData"
+            find DerivedData -name "*.app" || true
+            exit 1
+          fi
+          echo "Found .app at: $APP_PATH"
+          echo "APP_PATH=$APP_PATH" >> $CM_ENV
+
+      # ── 7. Package .app into a zip for Appetize ───────────────────────────
+      # Appetize expects a .zip containing the .app at the root level,
+      # e.g.: MyApp.app/  (directly inside the zip, not nested in a folder)
+      - name: Zip .app for Appetize
+        script: |
+          set -euo pipefail
+          source $CM_ENV 2>/dev/null || true
+
+          APP_NAME=$(basename "$APP_PATH")
+          APP_DIR=$(dirname "$APP_PATH")
+
+          cd "$APP_DIR"
+          zip -r "$CM_BUILD_DIR/${APP_ZIP}" "$APP_NAME"
+          cd "$CM_BUILD_DIR"
+
+          echo "Zipped: ${APP_ZIP}"
+          ls -lh "${APP_ZIP}"
+
+      # ── 8. Shutdown simulator ──────────────────────────────────────────────
+      - name: Shutdown simulator
+        script: |
+          source $CM_ENV 2>/dev/null || true
+          xcrun simctl shutdown "${SIMULATOR_UDID:-booted}" 2>/dev/null || true
+
+    artifacts:
+      # The simulator zip ready to upload to Appetize
+      - $APP_ZIP
+      # Build logs for debugging
+      - xcodebuild.log
+      - gradle-framework.log
+
+    # ── Optional: publish to Slack on failure ──────────────────────────────
+    # publishing:
+    #   slack:
+    #     channel: "#builds"
+    #     notify_on_build_start: false
+    #     notify:
+    #       success: false
+    #       failure: true

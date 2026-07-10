@@ -3,16 +3,15 @@ package com.raghav.counterapp.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import com.raghav.counterapp.ui.state.CounterState
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 class CounterViewModel : ViewModel() {
 
-    val uiState: StateFlow<CounterState>
-        field = MutableStateFlow(CounterState(count = 0, incEnabled = true, decEnabled = false))
-
+    private val _uiState = MutableStateFlow(CounterState(count = 0, incEnabled = true, decEnabled = false))
+    val uiState = _uiState.asStateFlow()
     fun increment() {
-        uiState.update { current ->
+        _uiState.update { current ->
             val newCount = current.count + 1
             current.copy(
                 count = newCount,
@@ -23,7 +22,7 @@ class CounterViewModel : ViewModel() {
     }
 
     fun decrement() {
-        uiState.update { current ->
+        _uiState.update { current ->
             val newCount = current.count - 1
             current.copy(
                 count = newCount,
@@ -34,7 +33,7 @@ class CounterViewModel : ViewModel() {
     }
 
     fun reset() {
-        uiState.value = CounterState(count = 0, incEnabled = true, decEnabled = false)
+        _uiState.value = CounterState(count = 0, incEnabled = true, decEnabled = false)
     }
 
 }

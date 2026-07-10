@@ -2,7 +2,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.androidApplication)
-    alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.ksp)
     alias(libs.plugins.composeCompiler)
 }
@@ -43,9 +42,9 @@ dependencies {
     implementation (libs.ktor.serialization.kotlinx.json)
     // Material 3 Icons Extended
     implementation(libs.androidx.material.icons.extended)
-    // Room DB
-    implementation(libs.androidx.room.runtime)
-    ksp(libs.androidx.room.compiler)
+    // Room3
+    implementation(libs.androidx.room3.runtime)
+    ksp(libs.androidx.room3.compiler)
     // Local Unit Tests
     testImplementation(libs.junit)
     // Instrumented UI Tests
